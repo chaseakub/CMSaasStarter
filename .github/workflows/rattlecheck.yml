@@ -74,20 +74,21 @@ jobs:
             fi
             status=0
             node "$cli" "$tree" --json --out "$side.json" >/dev/null || status=$?
-            # Exit 1 means the report contains findings. Other failures need review.
-            if [[ "$side" == base && "$status" == 3 ]]; then
-              jq -e '.schema == "rattlecheck.report/v1" and .doors.checked == 0' base.json >/dev/null
-              continue
-            elif (( status > 1 )); then
+            # Exit 1 is a report with findings. A previously empty base is valid.
+            if (( status > 1 )) && [[ "$side:$status" != base:3 ]]; then
               echo "RattleCheck could not cover the $side schema (exit $status)."
               exit "$status"
             fi
-            jq -e '.schema == "rattlecheck.report/v1" and .doors.checked > 0' "$side.json" >/dev/null
+            jq -e '.schema == "rattlecheck.report/v1" and (.findings | type == "array")' "$side.json" >/dev/null
           done
+          if ! jq -e '.coverage.ok == true and .doors.checked > 0' proposed.json >/dev/null; then
+            echo "No reviewable objects found in the proposed schema."
+            exit 1
+          fi
 
           jq -n --slurpfile base base.json --slurpfile proposed proposed.json '
             def rank: {"high": 1, "critical": 2}[.severity // ""] // 0;
-            def key: [.rule, .object, .name, .detail] | tojson;
+            def key: [.rule, .object, .name, .detail, .message] | tojson;
             INDEX($base[0].findings[]; key) as $prior |
             [$proposed[0].findings[] | select(rank > ($prior[key] | rank)) |
               {rule, severity, title, name, file, line}]
